@@ -1,0 +1,100 @@
+#!/usr/bin/python
+
+from pylab import *
+import os
+import os.path
+import argparse
+import numpy as np
+import scipy.ndimage as ndi
+import simplejson
+import PIL
+import sqlite3
+import StringIO
+from ocropy2 import CenterNormalizer
+rc("image", cmap="gray")
+
+parser = argparse.ArgumentParser("""
+Extract textlines from document images and store them in a database for training.
+
+Example:
+
+    `pseg-extract -o mylines.db *.json`
+
+For each input image, there should be three files:
+
+ - image.png -- the grayscale document image (black on white)
+ - image.pseg.png -- the page segmentation image
+ - image.json -- the textual ground truth, bounding boxes, and pseg values
+""")
+parser.add_argument("-d", "--display", action="store_true")
+parser.add_argument("-D", "--dilate", type=int, default=3)
+parser.add_argument("inputs", nargs="*")
+
+args = parser.parse_args()
+
+def pildumps(image, format="PNG"):
+    """Compress an image and return it as a string."""
+    result = StringIO.StringIO()
+    if image.dtype in [np.dtype('f'), np.dtype('d')]:
+        assert np.amin(image) > -0.001 and np.amax(image) < 1.001
+        image = np.clip(image, 0.0, 1.0)
+        image = np.array(image * 255.0, 'uint8')
+    PIL.Image.fromarray(image).save(result, format=format)
+    return result.getvalue()
+
+
+def grow_bbox(bbox, shape, r=10):
+    w, h = shape
+    x0, y0, x1, y1 = bbox
+    x0 = max(x0-r, 0)
+    y0 = max(y0-r, 0)
+    x1 = min(x1+r, w)
+    y1 = min(y1+r, h)
+    return (x0, y0, x1, y1)
+
+def pack_rgb(image):
+    image = array(image, 'i')
+    return (image[:,:,0]<<16) | (image[:,:,1]<<8) | image[:,:,2]
+
+def process_image(fname):
+    basename, _ = os.path.splitext(fname)
+    assert os.path.exists(basename+".png")
+    assert os.path.exists(basename+".json")
+    assert os.path.exists(basename+".pseg.png")
+    segmentation = simplejson.load(open(basename+".json"))
+    image = imread(basename+".png")
+    print basename, image.shape
+    image = amax(image) - image
+    image /= amax(image)
+    pseg = pack_rgb(PIL.Image.open(basename+".pseg.png"))
+    line_image = zeros(pseg.shape)
+    h, w = pseg.shape
+    cn = CenterNormalizer()
+    for line in segmentation["lines"]:
+        bbox0 = line["bbox"]
+        x0, y0, x1, y1 = grow_bbox(bbox0, (w, h), 10)
+        text = (line.get("text") or line.get("transcript"))
+        assert text is not None
+        value = line["pseg"]
+        mask = (value == pseg[y0:y1, x0:x1])
+        mask = ndi.maximum_filter(mask, 5)
+        limage = image[y0:y1, x0:x1]
+        masked_image = mask * limage
+        cn.measure(masked_image)
+        cimage = zeros(masked_image.shape)
+        for i, j in enumerate(cn.center):
+            cimage[j, i] = 1.0
+        line_image[y0:y1, x0:x1] = cimage
+    if args.dilate > 0:
+        # line_image = ndi.maximum_filter(line_image, args.dilate)
+        line_image = ndi.binary_dilation(line_image, iterations=args.dilate)
+    if args.display:
+        ion()
+        subplot(121); imshow(image)
+        subplot(122); imshow(line_image);
+        ginput(1, 1.0)
+    imsave(basename+".lines.png", line_image)
+
+for fname in args.inputs:
+    process_image(fname)
+

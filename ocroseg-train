@@ -1,0 +1,172 @@
+#!/usr/bin/python
+
+import matplotlib
+# matplotlib.use("GTK")
+
+from pylab import *
+rc("image", cmap="hot")
+import pylab
+import os
+import re
+import glob
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import ocropy2
+import time
+import resource
+import psutil
+import argparse
+import editdistance
+from contextlib import closing
+from torch.autograd import Variable
+import dlinputs as dli
+import dltrainers as dlt
+import uuid
+import scipy.ndimage as ndi
+
+parser = argparse.ArgumentParser("""Train an RNN recognizer.""")
+parser.add_argument("-m", "--model", default="seg-model.py",
+                    help="saved model or model specification")
+parser.add_argument("-i", "--input", default="all-pages.py",
+                    help="data source")
+parser.add_argument("-b", "--batchsize", default=1, type=int,
+                    help="batch size for training")
+parser.add_argument("-B", "--testbs", default=1, type=int,
+                    help="batchsize for tests")
+parser.add_argument("--ntrain", default=-1, type=int,
+                    help="ntrain value to use, overriding model")
+parser.add_argument("-M", "--make_mask", default=0, type=int,
+                    help="construct a mask by dilating the target")
+
+parser.add_argument("-o", "--output", default=None,
+                    help="prefix for model files")
+parser.add_argument("-e", "--every", default=2000, type=int,
+                    help="save/test after this many steps")
+parser.add_argument("-l", "--learningrate", default=1e-5, type=float,
+                    help="learning rate")
+parser.add_argument("-R", "--output_frequency", default=1, type=int,
+                    help="how often to display outputs")
+parser.add_argument("--no_eval", action="store_true",
+                    help="don't run evaluation")
+
+parser.add_argument("--display_lmax", default=6, type=int)
+parser.add_argument("--initial_skip", default=100, type=int)
+
+args = parser.parse_args()
+
+inputs = dli.loadable.load_input(args.input)
+data = inputs.training_data()
+data = dli.itbatch(args.batchsize)(data)
+
+if args.output is None:
+    args.output = re.sub(r"([-0-9]*)\.[^/]*$", "", args.model)
+    print "output prefix =", args.output
+
+def gyield():
+    ginput(1, 1e-4)
+
+def rss():
+    return process.memory_info().rss
+
+net = dli.loadable.load_net(args.model)
+print net
+trainer = dlt.Image2ImageTrainer(net)
+trainer.set_lr(5e-3)
+# trainer.gpu()
+
+def eval_testset(trainer, source):
+    source = dli.itbatch(args.testbs)(source)
+    n = 0
+    errs = []
+    for batch in source:
+        input = batch["input"]
+        if len(input.shape) < 2: break
+        output = batch["output"]
+        n += len(input)
+        gyield()
+        try:
+            result = trainer.predict_batch(input)
+        except Exception, e:
+            print "input", input.shape
+            raise e
+        target = dlt.zoom_like(output, result.shape)
+        if args.make_mask:
+            mask = ndi.maximum_filter(target, (0, args.make_mask, args.make_mask, 0))
+            error = abs(result - target)
+            error = error.ravel()[mask.ravel() > (np.amax(mask)/2)]
+            error = np.mean(error)
+        else:
+            error = np.mean(abs(result - target))
+        errs.append(error)
+    return mean(errs), n
+
+ntrain = net.META.get("ntrain", 0)
+if args.ntrain > 0: ntrain = args.ntrain
+next_save = ntrain + args.initial_skip
+
+start_time = time.time()
+for i, sample in enumerate(data):
+    input, target, mask = [sample.get(key, None)
+                            for key in "input output mask".split()]
+    if args.make_mask > 0:
+        mask = ndi.maximum_filter(target, (0, args.make_mask, args.make_mask, 0))
+    info = (i % 10 == 0)
+    if info:
+        print i, ntrain, input.shape,
+        print np.amin(input), np.amax(input),
+        print np.amin(target), np.amax(target),
+        print
+        clf()
+        subplot(221); imshow(input[0,...,0])
+        gyield()
+        disp = ndi.maximum_filter(target[0,...,0], args.display_lmax)
+        if mask is not None:
+            disp = np.array([disp, disp, mask[0,...,0]],'f')
+            disp = disp.transpose(1, 2, 0)
+        subplot(222); imshow(disp)
+        gyield()
+    if ntrain >= next_save:
+        net.META["ntrain"] = ntrain
+        net.META["parent"] = net.META.get("uuid", "")
+        net.META["uuid"] = str(uuid.uuid1())
+        if hasattr(inputs, "test_data") and not args.no_eval:
+            testdata = inputs.test_data()
+            testerr, _ = eval_testset(trainer, testdata)
+            print
+            print "testerr", testerr
+            print
+            record = dict(n=ntrain, testerr=testerr, time=time.time()-start_time)
+            net.META["test_loss"] = net.META.get("test_loss", []) + [(ntrain, testerr)]
+            micros = min(999999, int(1e6*testerr))
+            millis = ntrain//1000
+            name = "%s-%06d-%06d.pt" % (args.output, millis, micros)
+        else:
+            millis = ntrain//1000
+            name = "%s-%06d.pt" % (args.output, millis)
+        gyield()
+        dli.loadable.save_net(name, net)
+        gyield()
+        next_save = ntrain + args.every
+        start_time = time.time()
+    gyield()
+    output, loss = trainer.train_batch(input, target, mask)
+    assert isinstance(output, np.ndarray)
+    ntrain += len(output)
+    if info:
+        print "\t", loss, output.shape, type(output)
+    if info:
+        gyield()
+        subplot(223)
+        imshow(ndi.maximum_filter(output[0,...,0], args.display_lmax))
+        ch, cw = [int(x) for x in ndi.center_of_mass(output[0,...,0] > np.amax(output[0,...,0]/2))]
+        plot([cw], [ch], "-gD")
+        r = 50
+        subplot(224)
+        try:
+            imshow(output[0,ch-r:ch+r,cw-r:cw+r,0], interpolation="nearest")
+        except:
+            pass
+        gyield()

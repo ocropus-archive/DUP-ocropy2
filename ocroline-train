@@ -1,0 +1,219 @@
+#!/usr/bin/python
+
+import matplotlib
+# matplotlib.use("GTK")
+
+from pylab import *
+rc("image", cmap="hot")
+import pylab
+import os
+import re
+import glob
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import ocropy2
+import time
+import resource
+import psutil
+import argparse
+import editdistance
+from contextlib import closing
+from torch.autograd import Variable
+import dlinputs as dli
+import uuid
+
+parser = argparse.ArgumentParser("""Train an RNN recognizer.""")
+parser.add_argument("-m", "--model", default="ocr-model.py",
+                    help="saved model or model specification")
+parser.add_argument("-i", "--input", default="uw3dew-input.py",
+                    help="data source")
+parser.add_argument("-b", "--batchsize", default=10, type=int,
+                    help="batch size for training")
+parser.add_argument("-B", "--testbs", default=5, type=int,
+                    help="batchsize for tests")
+parser.add_argument("-r", "--resume", action="store_true",
+                    help="resume from latest model file, if any")
+parser.add_argument("-N", "--no_eval", action="store_true",
+                    help="do not perform evaluation")
+parser.add_argument("-E", "--eval_only", action="store_true",
+                    help="only evaluate and exit")
+parser.add_argument("--verbose_eval", action="store_true",
+                    help="verbose evaluation output")
+parser.add_argument("-V", "--verbose", action="store_true",
+                    help="verbose output")
+
+parser.add_argument("-o", "--output", default=None,
+                    help="prefix for model files")
+parser.add_argument("-e", "--every", default=10000, type=int,
+                    help="save/test after this many steps")
+parser.add_argument("-l", "--learningrate", default=1e-5, type=float,
+                    help="learning rate")
+parser.add_argument("-R", "--output_frequency", default=1, type=int,
+                    help="how often to display outputs")
+
+parser.add_argument("--ntrain", default=-1, type=int)
+
+args = parser.parse_args()
+
+inputs = dli.loadable.load_input(args.input)
+
+# convert command line args into plain dict to add to save files
+parameters = {k: v for k, v in args.__dict__.items()}
+
+process = psutil.Process(os.getpid())
+
+def fix_input(input):
+    input = np.expand_dims(input, 3)
+    return input.transpose(0, 3, 2, 1)
+
+def get_input(which="training", batchsize=args.batchsize):
+    if which=="training":
+        data = inputs.training_data()
+    else:
+        data = inputs.test_data()
+    data = dli.itbatchedbuckets(batchsize=batchsize, seqkey="image")(data)
+    data = dli.itcopy(target="transcript")(data)
+    data = dli.itmap(image=dli.images2batch, target=dli.transcripts2batch)(data)
+    data = dli.itinfo()(data)
+    data = dli.itmap(image=fix_input)(data)
+    return data
+
+def rss():
+    return process.memory_info().rss
+
+def eval_testset(ocr, source):
+    print "# start eval"
+    nchars = 0
+    nlines = 0
+    total = 0
+    for batch in source:
+        if False:
+            input = ocropy2.astorch(batch["image"])
+            target = ocropy2.astorch(batch["target"])
+            ocr.train_batch(input, target)
+            for i in range(len(batch["transcript"])):
+                tru = batch["transcript"][i]
+                pre = ocropy2.transcribe(ocr.probs[i])
+                if args.verbose_eval:
+                    print nlines, nchars, "#errs", total, "err", total*1.0/max(1, nchars)
+                    print "PRE", pre
+                    print "TRU", tru
+                    print
+                errs = editdistance.eval(pre, tru)
+                total += errs
+                nchars += len(tru)
+                nlines += 1
+        else:
+            result = ocr.predict_batch(batch["image"])
+            for i, (pre, tru) in enumerate(zip(result, batch["transcript"])):
+                if args.verbose_eval:
+                    print nlines
+                    print "PRE", pre
+                    print "TRU", tru
+                    print
+                errs = editdistance.eval(pre, tru)
+                total += errs
+                nchars += len(tru)
+                nlines += 1
+    return total*1.0/nchars, nchars, nlines
+
+if args.output is None:
+    args.output = re.sub(r"[-0-9]*\.[^/]*$", "", args.model)
+    if args.output == "":
+        args.output = "ocrline"
+
+print "output prefix =", args.output
+
+net = None
+if args.resume:
+    models = glob.glob(args.output + "*" + ".pt")
+    models.sort(key=os.path.getmtime)
+    models = models[::-1]
+    for model in models[:3]:
+        try:
+            print "# resuming", model
+            net = dli.loadable.load_net(model)
+            break
+        except Exception, e:
+            print e
+            continue
+
+if net is None:
+    net = dli.loadable.load_net(args.model)
+
+if args.ntrain >= 0:
+    net.META["ntrain"] = args.ntrain
+
+ocr = ocropy2.SimpleOCR(net, lr=args.learningrate)
+print net, net.META.get("ntrain"), ocr.ntrain
+ocr.gpu()
+
+if args.eval_only:
+    testdata = get_input("test")
+    testerr, _, _ = eval_testset(ocr, testdata)
+    print
+    print "testerr", testerr
+    print
+    sys.exit(0)
+
+start_time = time.time()
+def train_for(data, ntrain=1000000):
+    global ocr, sample
+    inc_save = args.every
+    next_save = ocr.ntrain + 100
+    start = rss()
+    for i, sample in enumerate(data):
+        last = rss()
+        if i >= ntrain: break
+        if i%args.output_frequency==0:
+            print i, ocr.ntrain
+        if ocr.ntrain >= next_save:
+            ocr.model.META["ntrain"] = ocr.ntrain
+            ocr.model.META["parent"] = ocr.model.META.get("uuid", "")
+            ocr.model.META["uuid"] = str(uuid.uuid1())
+            if hasattr(inputs, "test_data") and not args.no_eval:
+                testdata = get_input("test")
+                testerr, _, _ = eval_testset(ocr, testdata)
+                print
+                print "testerr", testerr
+                print
+                record = dict(n=ocr.ntrain, testerr=testerr, time=time.time()-start_time)
+                ocr.model.META["test_loss"] = ocr.model.META.get("test_loss", []) + [(ocr.ntrain, testerr)]
+                micros = min(999999, int(1e6*testerr))
+                millis = ocr.ntrain//1000
+                ocr.save("%s-%06d-%06d.pt" % (args.output, millis, micros))
+            else:
+                millis = ocr.ntrain//1000
+                ocr.save("%s-%06d.pt" % (args.output, millis))
+            next_save += inc_save
+        input = sample["image"]
+        target = sample["target"]
+        # NuPy: BHWD Torch: BDWH
+        print input.shape
+        input = ocropy2.astorch(input)
+        target = ocropy2.astorch(target)
+        ocr.train_batch(input, target)
+        if i%args.output_frequency==0:
+            aligned = ocropy2.transcribe(ocr.aligned[0])
+            result = ocropy2.transcribe(ocr.probs[0])
+            transcripts = sample["transcript"]
+            assert isinstance(transcripts, list)
+            print "TRU", transcripts[0]
+            print "ALN", aligned
+            print "PRE", result
+            print "mem", "%.2f" % ((rss() - last)/1e6), "%.2f" % ((rss() - start)/1e6)
+            if i%(args.output_frequency*10)==0:
+                clf()
+                subplot(311)
+                imshow(ocropy2.asnd(input[0][0]).T)
+                subplot(312)
+                imshow(ocropy2.asnd(target[0]).T)
+                subplot(313)
+                imshow(ocropy2.asnd(ocr.probs[0]).T, cmap=cm.gist_stern)
+                ginput(1, 0.001)
+
+pdata = get_input()
+print pdata.next().keys()
+train_for(pdata, 1000000)

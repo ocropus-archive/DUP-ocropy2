@@ -1,0 +1,90 @@
+#!/usr/bin/python
+import os
+import re
+import glob
+import codecs
+import random as pyr
+import os.path
+import argparse
+import warnings
+from collections import Counter
+
+import torch
+import scipy.ndimage as ndi
+import torch.nn.functional as F
+from pylab import *
+from torch import nn, optim, autograd
+from scipy.ndimage import measurements
+from torch.autograd import Variable
+
+from ocroseg import layers, degrade, psegutils
+import ocroline
+
+rc("image", cmap="gray")
+ion()
+
+parser = argparse.ArgumentParser("run a page segmenter")
+parser.add_argument("-o", "--extension", default="txt", help="extension for recognized output")
+parser.add_argument("-O", "--overwrite", action="store_true", help="overwrite existing output files")
+parser.add_argument("-m", "--load", default="models/default-line-segmenter.pt", help="load a model")
+parser.add_argument("-M", "--ocrmodel", default="models/default-line-recognizer.pt")
+parser.add_argument("-P", "--pad", default=5, type=int, help="padding before extraction")
+parser.add_argument("-I", "--inverse_pageseg", action="store_true", help="mask dilation prior to extraction")
+parser.add_argument("--mask", default=5, type=int, help="mask dilation prior to extraction")
+parser.add_argument("--halo", default=20, type=int, help="mask outputs prior to labeling")
+parser.add_argument("--docthresh", default=0.5, type=float, help="document threshold")
+parser.add_argument("--threshold", default=0.3, type=float, help="mask threshold")
+parser.add_argument("fnames", nargs="+", help="file names to be processed")
+args = parser.parse_args()
+
+def ssize(s):
+    return s.stop - s.start
+def spad(s, pad, w):
+    return slice(max(0, s.start-pad), min(w, s.stop+pad))
+
+print "#", args.load
+segmenter = psegutils.LineSegmenter(args.load, invert=args.inverse_pageseg)
+
+print "#", args.ocrmodel
+ocr = ocroline.SimpleOCR()
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    ocr.load(args.ocrmodel)
+
+for pageno, fname in enumerate(args.fnames):
+    base, _ = os.path.splitext(fname)
+    if args.extension != "-":
+        oname = oname = base+"."+args.extension
+        if not args.overwrite and os.path.exists(oname):
+            print "#", oname, ": exists"
+            continue
+    pimage = imread(fname)
+    assert amin(pimage) >= 0.0
+    assert amin(pimage) < 0.1
+    assert amax(pimage) > 0.5
+    assert amax(pimage) < 1.01
+    if pimage.ndim==3:
+        pimage = mean(pimage[:,:,:3], 2)
+    if mean(pimage) > 0.5:
+        pimage = 1.0 - pimage
+    h, w = pimage.shape
+    base, _  = os.path.splitext(fname)
+    lseg = segmenter.lineseg(pimage)
+    lines = []
+    for line, bounds in psegutils.extract_textlines(lseg, pimage):
+        line -= amin(line)
+        line /= amax(line)
+        if mean(line) > 0.5:
+            line = 1.0 - line
+        lines.append(line)
+        # clf(); imshow(line); draw(); ginput(1, 1000)
+    outputs = ocr.recognize(lines)
+    if args.extension != "-":
+        stream = codecs.open(oname, "w", "utf-8")
+    else:
+        stream = sys.stdout
+    for output in outputs:
+        stream.write(output)
+        stream.write("\n")
+    if stream != sys.stdout:
+        stream.close()

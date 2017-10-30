@@ -1,2 +1,2 @@
 #!/bin/bash
-docker run -v $(pwd):/current -p 5900:5900 -i -t ocropy2 "$@"
+nvidia-docker run -v $(pwd):/current -p 5900:5900 -i -t ocropy2 "$@"

@@ -40,12 +40,21 @@ parser.add_argument("-o", "--outext", default=None,
                     help="extension for output")
 parser.add_argument("-n", "--normalization", default="none",
                     help="string normalization prior to error rate computation")
+parser.add_argument("-v", "--verbose", action="store_true",
+                    help="provide additional information, e.g. about network")
 
 args = parser.parse_args()
 
-net = dli.loadable.load_net(args.model)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    net = dli.loadable.load_net(args.model)
 ocr = ocropy2.SimpleOCR(net)
-print net, net.META.get("ntrain"), ocr.ntrain
+if args.verbose:
+    print net
+    for k, v in net.META.items():
+        print k, repr(v).replace("\n", " ")[:50]
+    if "test_loss" in net.META:
+        print "last test_loss", sorted(net.META["test_loss"])[-1]
 ocr.gpu()
 
 def read_image(fname):

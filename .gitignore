@@ -1,0 +1,10 @@
+OLD
+build
+docker/repos
+pages
+pages-gen
+book
+*.pyc
+*.pt
+*~
+*.json

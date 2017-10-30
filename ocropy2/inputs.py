@@ -101,7 +101,7 @@ def itsqlite(dbfile, table="train", nepochs=1, cols="*",
     if fields is not None:
         fields = fields.split(",")
     for epoch in xrange(nepochs):
-        if verbose: 
+        if verbose:
             print "# epoch", epoch, "of", nepochs, "from", dbfile, table
         count = 0
         c = db.cursor()
@@ -204,12 +204,14 @@ def makeseq(image):
     assert image.ndim==2
     return image.T
 
-def makebatch(images, for_target=False):
+def makebatch(images, for_target=False, l_pad=0, d_pad=0):
     """Given a list of LD sequences, make a BLD batch tensor."""
     assert isinstance(images, list), type(images)
     assert isinstance(images[0], np.ndarray), images
     assert images[0].ndim==2, images[0].ndim
     l, d = np.amax(np.array([img.shape for img in images], 'i'), axis=0)
+    l += l_pad
+    d += d_pad
     ibatch = np.zeros([len(images), int(l), int(d)])
     if for_target:
         ibatch[:, :, 0] = 1.0

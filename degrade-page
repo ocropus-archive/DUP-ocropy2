@@ -1,0 +1,88 @@
+#!/usr/bin/python
+
+from pylab import *
+import os
+import os.path
+import re
+import argparse
+import numpy as np
+import scipy.ndimage as ndi
+import random as pyr
+import simplejson
+import PIL
+import StringIO
+from collections import Counter
+
+rc("image", cmap="gray")
+
+parser = argparse.ArgumentParser("""
+Extract textlines from document images and store them in a database for training.
+
+Example:
+
+    `pseg-extract -o mylines.db *.json`
+
+For each input image, there should be three files:
+
+ - image.png -- the grayscale document image (black on white)
+ - image.pseg.png -- the page segmentation image
+ - image.json -- the textual ground truth, bounding boxes, and pseg values
+""")
+
+parser.add_argument("-d", "--distortions", default="(50.0,10.0), (5.0, 3.0), (0.0, 1.0)")
+parser.add_argument("input_base")
+parser.add_argument("output_base")
+args = parser.parse_args()
+
+input_base = re.sub(r"\.[^/]*$", "", args.input_base)
+output_base = re.sub(r"\.[^/]*$", "", args.output_base)
+
+image = imread(input_base+".png")
+if image.ndim==3: image = mean(image, 2)
+image -= amin(image)
+image /= amax(image)
+h, w = image.shape[:2]
+
+pseg = np.array(PIL.Image.open(input_base+".pseg.png"), 'uint8')
+assert pseg.dtype == dtype("uint8")
+pseg = 65536*pseg[...,0] + 256*pseg[...,1] + pseg[...,2]
+
+try:
+    lines = imread(input_base+".lines.png")
+    if lines.ndim==3: lines = mean(lines, 2)
+except:
+    lines = None
+
+json = simplejson.loads(open(input_base+".json").read())
+
+distortions = eval("["+args.distortions+"]")
+total = zeros((2, h, w), 'f')
+for sigma, maxdist in distortions:
+    deltas = randn(2, h, w)
+    deltas = ndi.gaussian_filter(deltas, (0, sigma, 0))
+    deltas = ndi.gaussian_filter(deltas, (0, 0, sigma))
+    r = amax((deltas[...,0]**2 + deltas[...,1]**2)**.5)
+    deltas *= maxdist / r
+    total += deltas
+deltas = total
+xy = array(meshgrid(range(h),range(w))).transpose(0,2,1)
+deltas += xy
+
+def filtered_noise(size, sigma):
+    data = np.random.uniform(size=size)
+    data = ndi.gaussian_filter(data, 0.5)
+    data -= amin(data)
+    data /= amax(data)
+    return data
+
+distorted_image = ndi.map_coordinates(image, deltas, order=1)
+paper = 1 - 0.3 * filtered_noise((h, w), 10**pyr.uniform(-1.0, 1.0)) ** pyr.uniform(1.0, 5.0)
+ink = 0.7 * filtered_noise((h, w), 10**pyr.uniform(-1.0, 1.0)) ** pyr.uniform(1.0, 5.0)
+distorted_image = distorted_image * paper + (1-distorted_image) * ink
+distorted_bin = 1.0 * (distorted_image > mean([amin(distorted_image), amax(distorted_image)]))
+imshow(distorted_bin); show()
+distorted_pseg = ndi.map_coordinates(pseg, deltas, order=0)
+if lines is not None:
+    distorted_lines = ndi.map_coordinates(lines, deltas, order=0)
+else:
+    distorted_lines = None

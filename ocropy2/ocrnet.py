@@ -430,8 +430,15 @@ class SimpleOCR(object):
         """Convert to cuda if required."""
         if self.cuda: return x.cuda()
         return x
+    def pad_length(self, input, r=20):
+        b, f, l, d = input.shape
+        assert f==1, "must have #features == 1"
+        result = np.zeros((b, f, l+r, d))
+        result[:, :, :l, :] = input
+        return result
     def train_batch(self, input, target):
         """Train a BLD input batch against a BLD target batch."""
+        input = self.pad_length(input)
         self.input = torch.FloatTensor()
         self.logits = torch.FloatTensor()
         self.aligned = torch.FloatTensor()
@@ -467,6 +474,7 @@ class SimpleOCR(object):
         self.train_batch(images, targets)
     def predict_batch(self, input):
         """Train a BLD input batch against a BLD target batch."""
+        input = self.pad_length(input)
         input = astorch(input)
         input = Variable(self.C(input), volatile=True)
         output = self.model.forward(input)
@@ -482,6 +490,8 @@ class SimpleOCR(object):
         result = []
         for batch in data:
             input = batch["input"]
+            if input.ndim==3:
+                input = np.expand_dims(input, 1)
             try:
                 predicted = self.predict_batch(input)
             except RuntimeError:

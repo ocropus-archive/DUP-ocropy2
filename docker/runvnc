@@ -1,0 +1,6 @@
+#!/bin/bash
+sudo rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+tightvncserver -geometry ${VNC_GEOMETRY:-1600x900} :0
+export DISPLAY=:0
+sudo -u "#${DUID:-1000}" -g "#${DGID:-1000}" -- "$@"
+tightvncserver -kill :0

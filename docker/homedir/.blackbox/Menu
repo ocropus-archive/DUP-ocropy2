@@ -1,0 +1,3 @@
+[begin] (Blackbox 0.61.x)
+ [exec] (rxvt) {rxvt-unicode}
+[end]

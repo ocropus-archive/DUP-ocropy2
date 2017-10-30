@@ -26,7 +26,7 @@ import uuid
 import codecs
 
 parser = argparse.ArgumentParser("""Apply an RNN Recognizer""")
-parser.add_argument("-m", "--model", default="ocr/ocr-004213-005663.pt",
+parser.add_argument("-m", "--model", default="/usr/local/share/ocropy2/ocr-default.pt",
                     help="saved model or model specification")
 parser.add_argument("inputs", nargs="+",
                     help="input files for recognition")

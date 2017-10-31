@@ -6,7 +6,7 @@ image:
 	docker build -t ocropy2-base base
 	-mkdir -p repos
 	-mkdir -p homedir/.vnc
-	echo ${VNCPASS:-nopass} | vncpasswd -f > homedir/.vnc/passwd
+	echo ${DOCKER_VNC:-nopassword} | vncpasswd -f > homedir/.vnc/passwd
 	$(call gitget,https://github.com/tmbdev/hocr-tools.git,repos/hocr-tools)
 	$(call gitget,https://github.com/tmbdev/ocropy.git,repos/ocropy)
 	$(call gitget,https://github.com/tmbdev/cctc.git,repos/cctc)
@@ -20,3 +20,9 @@ image:
 clean:
 	rm -rf repos
 	rm -rf homedir/.vnc
+
+clean-docker: clean
+	-docker container prune -f
+	-docker image prune -f
+	-docker rmi ocropy2
+	-docker rmi ocropy2-base

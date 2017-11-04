@@ -1,0 +1,139 @@
+#!/usr/bin/python
+
+import matplotlib
+# matplotlib.use("GTK")
+
+from pylab import *
+rc("image", cmap="hot")
+import pylab
+import os
+import re
+import glob
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+import ocropy2
+from ocropy2 import lineest
+import time
+import resource
+import psutil
+import argparse
+import editdistance
+from contextlib import closing
+from torch.autograd import Variable
+import dlinputs as dli
+import uuid
+import codecs
+
+parser = argparse.ArgumentParser("""Apply an RNN Recognizer to an input pipeline.""")
+parser.add_argument("-m", "--model", default="/usr/local/share/ocropy2/ocr-default.pt",
+                    help="saved model or model specification")
+parser.add_argument("inputs", nargs="+",
+                    help="input files for recognition")
+parser.add_argument("-t", "--threshold", default=-1, type=int,
+                    help="threshold for outputting errors")
+parser.add_argument("-e", "--eval", action="store_true",
+                    help="only compute error rate")
+parser.add_argument("-g", "--gtext", default="gt.txt",
+                    help="ground truth extension")
+parser.add_argument("-o", "--outext", default=None,
+                    help="extension for output")
+parser.add_argument("-n", "--normalization", default="none",
+                    help="string normalization prior to error rate computation")
+parser.add_argument("-v", "--verbose", action="store_true",
+                    help="provide additional information, e.g. about network")
+parser.add_argument("--image", default="png")
+parser.add_argument("--gt", default="txt")
+parser.add_argument("--display", action="store_true")
+
+args = parser.parse_args()
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    net = dli.loadable.load_net(args.model)
+ocr = ocropy2.SimpleOCR(net)
+if args.verbose:
+    print net
+    for k, v in net.META.items():
+        print k, repr(v).replace("\n", " ")[:50]
+    if "test_loss" in net.META:
+        print "last test_loss", sorted(net.META["test_loss"])[-1]
+ocr.gpu()
+
+normalizer = lineest.CenterNormalizer()
+
+def fix_input(input):
+    input = np.expand_dims(input, 3)
+    return input.transpose(0, 3, 2, 1)
+
+def autoinvert(input):
+    assert amin(input) >= 0
+    assert amax(input) < 1.01
+    input = input / amax(input)
+    if mean(input) > 0.5:
+        input = 1.0 - input
+    return input
+
+def get_data(data, batchsize=20,
+                 image_key=args.image,
+                 transcript_key=args.gt,
+                 verbose=True):
+    data = (dli.source(data) |
+            dli.itren(image=image_key, transcript=transcript_key) |
+            dli.itmap(image=dli.pilgray) |
+            dli.itmap(image=autoinvert) |
+            dli.itmap(image=normalizer.measure_and_normalize) |
+            dli.itbatchedbuckets(batchsize=batchsize, seqkey="image") |
+            dli.itcopy(target="transcript") |
+            dli.itmap(image=dli.images2batch, target=dli.transcripts2batch) |
+            dli.itmap(image=fix_input) |
+            dli.itinfo())
+    return data
+
+def normalize(s, normalization):
+    if normalization == "alphanum":
+        return re.sub(r"[^0-9A-Za-z]+", " ", s).strip()
+    elif normalization == "none":
+        return re.sub(r"[~ ]+", " ", s).strip()
+    else:
+        raise Exception("%s: unknown normalization" % normalization)
+
+def compute_errors(gt, result, normalization="none"):
+    gt = normalize(gt, normalization)
+    result = normalize(result, normalization)
+    return editdistance.eval(gt, result)
+
+num_chars = 0
+num_lines = 0
+num_errors = 0
+for fname in args.inputs:
+    print "# open", fname
+    data = get_data(dli.itopen(fname))
+    for batch in data:
+        images = batch["image"]
+        results = ocr.predict_batch(batch["image"])
+        transcripts = batch["transcript"]
+        if "__key__" in batch: keys = batch["__key__"]
+        else: keys = ["?"] * len(results)
+        for i in range(len(results)):
+                result = results[i].strip()
+                gt = transcripts[i].strip()
+                key = keys[i]
+                errors = compute_errors(gt, result, args.normalization)
+                num_chars += len(gt)
+                num_lines += 1
+                num_errors += errors
+                if errors >= args.threshold:
+                    print "#", num_lines, num_chars, num_errors / float(num_chars)
+                    print "KEY", key
+                    print "TRU", gt
+                    print "PRE", result
+                    print "ERR", errors
+                    print
+                    if args.display:
+                        ion()
+                        imshow(images[i, 0, :, :].T)
+                        ginput(1, 1000)
+
+print num_errors / float(num_chars), num_errors, num_chars, num_lines

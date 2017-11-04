@@ -1,0 +1,1 @@
+can be ignored and the system is approximately closed. Values near 1 describe

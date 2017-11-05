@@ -18,8 +18,8 @@ EXPOSE 5900
 ENV HOME=/root
 ADD homedir/.vimrc /root/.vimrc
 
-ENV HOME=/home/${USER}
 ENV USER=${USER}
+ENV HOME=/home/${USER}
 ENV SHELL=${SHELL}
 ENV DUID=${DUID}
 ENV DGID=${DGID}

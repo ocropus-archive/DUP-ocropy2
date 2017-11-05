@@ -15,7 +15,8 @@ image:
 	$(call gitget,https://github.com/NVLabs/dltrainers.git,repos/dltrainers)
 	$(call gitget,git@github.com:tmbdev/ocropy2.git,repos/ocropy2)
 	test -f repos/ocropy2/ocr-default.pt || curl https://storage.googleapis.com/tmbmodels/ocr-default.pt > repos/ocropy2/ocr-default.pt
-	docker build --no-cache -t ocropy2 .
+	docker build --no-cache --build-arg DUID=$(shell id -u) --build-arg DGID=$(shell id -g) --build-arg USER=$(shell id -un) -t ocropy2 .
+	@echo; echo container built for: DUID=$(shell id -u) DGID=$(shell id -g) USER=$(shell id -un); echo
 
 clean:
 	rm -rf repos

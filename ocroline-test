@@ -46,6 +46,7 @@ parser.add_argument("-v", "--verbose", action="store_true",
 parser.add_argument("--image", default="png")
 parser.add_argument("--gt", default="txt")
 parser.add_argument("--display", action="store_true")
+parser.add_argument("--exclude_keys", default="%@%-never-matches-anything-%@%")
 
 args = parser.parse_args()
 
@@ -81,6 +82,7 @@ def get_data(data, batchsize=20,
                  verbose=True):
     data = (dli.source(data) |
             dli.itren(image=image_key, transcript=transcript_key) |
+            dli.itgrep(_not=True, __key__=args.exclude_keys) |
             dli.itmap(image=dli.pilgray) |
             dli.itmap(image=autoinvert) |
             dli.itmap(image=normalizer.measure_and_normalize) |
@@ -109,31 +111,34 @@ num_lines = 0
 num_errors = 0
 for fname in args.inputs:
     print "# open", fname
-    data = get_data(dli.itopen(fname))
+    data = get_data(dli.itopen(fname, shuffle=False))
     for batch in data:
         images = batch["image"]
-        results = ocr.predict_batch(batch["image"])
         transcripts = batch["transcript"]
+        assert len(images)==len(transcripts)
+        results = ocr.predict_batch(batch["image"])
+        if len(transcripts)==0: break
+        assert len(transcripts)==len(results), (len(transcripts), len(results))
         if "__key__" in batch: keys = batch["__key__"]
         else: keys = ["?"] * len(results)
         for i in range(len(results)):
-                result = results[i].strip()
-                gt = transcripts[i].strip()
-                key = keys[i]
-                errors = compute_errors(gt, result, args.normalization)
-                num_chars += len(gt)
-                num_lines += 1
-                num_errors += errors
-                if errors >= args.threshold:
-                    print "#", num_lines, num_chars, num_errors / float(num_chars)
-                    print "KEY", key
-                    print "TRU", gt
-                    print "PRE", result
-                    print "ERR", errors
-                    print
-                    if args.display:
-                        ion()
-                        imshow(images[i, 0, :, :].T)
-                        ginput(1, 1000)
+            result = results[i].strip()
+            gt = transcripts[i].strip()
+            key = keys[i]
+            errors = compute_errors(gt, result, args.normalization)
+            num_chars += len(gt)
+            num_lines += 1
+            num_errors += errors
+            if errors >= args.threshold:
+                print "#", num_lines, num_chars, num_errors / float(num_chars)
+                print "KEY", key
+                print "TRU", gt
+                print "PRE", result
+                print "ERR", errors
+                print
+                if args.display:
+                    ion()
+                    imshow(images[i, 0, :, :].T)
+                    ginput(1, 1000)
 
 print num_errors / float(num_chars), num_errors, num_chars, num_lines

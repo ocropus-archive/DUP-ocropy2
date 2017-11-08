@@ -82,6 +82,10 @@ class CenterNormalizer:
         return scaled
 
     def measure_and_normalize(self, line):
-        if line.ndim==3: line = mean(line, 2)
-        self.measure(line)
-        return self.normalize(line)
+        try:
+            if line.ndim==3: line = mean(line, 2)
+            self.measure(line)
+            result = self.normalize(line)
+            return result
+        except:
+            return np.zeros((48, 1), 'f')

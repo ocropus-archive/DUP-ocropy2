@@ -54,8 +54,11 @@ parser.add_argument("-R", "--output_frequency", default=1, type=int,
                     help="how often to display outputs")
 
 parser.add_argument("--ntrain", default=-1, type=int)
+parser.add_argument("--prob_cm", default="gist_stern")
 
 args = parser.parse_args()
+
+ion()
 
 inputs = dli.loadable.load_input(args.input)
 
@@ -192,8 +195,8 @@ def train_for(data, ntrain=1000000):
         target = sample["target"]
         # NuPy: BHWD Torch: BDWH
         print input.shape
-        input = ocropy2.astorch(input)
-        target = ocropy2.astorch(target)
+        # input = ocropy2.astorch(input)
+        # target = ocropy2.astorch(target)
         ocr.train_batch(input, target)
         if i%args.output_frequency==0:
             aligned = ocropy2.transcribe(ocr.aligned[0])
@@ -206,12 +209,14 @@ def train_for(data, ntrain=1000000):
             print "mem", "%.2f" % ((rss() - last)/1e6), "%.2f" % ((rss() - start)/1e6)
             if i%(args.output_frequency*10)==0:
                 clf()
-                subplot(311)
+                subplot(411)
                 imshow(ocropy2.asnd(input[0][0]).T)
-                subplot(312)
+                subplot(412)
+                imshow(ocropy2.asnd(ocr.probs[0]).T, cmap=args.prob_cm)
+                subplot(413)
                 imshow(ocropy2.asnd(target[0]).T)
-                subplot(313)
-                imshow(ocropy2.asnd(ocr.probs[0]).T, cmap=cm.gist_stern)
+                subplot(414)
+                imshow(ocropy2.asnd(ocr.aligned[0]).T, cmap=args.prob_cm)
                 ginput(1, 0.001)
 
 pdata = get_input()

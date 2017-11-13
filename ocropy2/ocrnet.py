@@ -438,13 +438,15 @@ class SimpleOCR(object):
         return result
     def train_batch(self, input, target):
         """Train a BLD input batch against a BLD target batch."""
+        assert input.shape[0] == target.shape[0]
         input = self.pad_length(input)
+        input = astorch(input)
+        target = astorch(target)
         self.input = torch.FloatTensor()
         self.logits = torch.FloatTensor()
         self.aligned = torch.FloatTensor()
         self.target = torch.FloatTensor()
         try:
-            assert input.size(0) == target.size(0)
             self.ntrain += input.size(0)
             self.input = Variable(self.C(input))
             self.target = self.C(target)

@@ -1,0 +1,80 @@
+#!/usr/bin/python
+import os
+import re
+import glob
+import codecs
+import random as pyr
+import os.path
+import argparse
+import warnings
+from collections import Counter
+
+import torch
+import scipy.ndimage as ndi
+import torch.nn.functional as F
+from pylab import *
+from torch import nn, optim, autograd
+from scipy.ndimage import measurements
+from torch.autograd import Variable
+from ocropy2 import psegutils
+from ocropy2 import layers
+
+rc("image", cmap="gray")
+ion()
+
+parser = argparse.ArgumentParser("run a page segmenter")
+parser.add_argument("-m", "--load", default="/usr/local/share/ocropy2/default-line-segmenter.pt", help="load a model")
+parser.add_argument("-P", "--pad", default=5, type=int, help="padding before extraction")
+parser.add_argument("-I", "--inverse_pageseg", action="store_true", help="invert the page")
+parser.add_argument("--mask", default=5, type=int, help="mask dilation prior to extraction")
+parser.add_argument("--halo", default=20, type=int, help="mask outputs prior to labeling")
+parser.add_argument("--docthresh", default=0.5, type=float, help="document threshold")
+parser.add_argument("--suffix", default="")
+parser.add_argument("--threshold", default=0.3, type=float, help="mask threshold")
+parser.add_argument("fnames", nargs="+", help="file names to be processed")
+args = parser.parse_args()
+
+def ssize(s):
+    return s.stop - s.start
+def spad(s, pad, w):
+    return slice(max(0, s.start-pad), min(w, s.stop+pad))
+
+print "#", args.load
+segmenter = psegutils.LineSegmenter(args.load, invert=args.inverse_pageseg)
+
+for pageno, fname in enumerate(args.fnames):
+    base = re.sub(r"\.[^/]*$", "", fname) + args.suffix
+    if os.path.exists(base):
+        raise Exception(base+": already exists")
+
+def read_image(fname):
+    pimage = imread(fname)
+    assert amin(pimage) >= 0.0
+    assert amin(pimage) < 0.1
+    assert amax(pimage) > 0.5
+    assert amax(pimage) < 1.01
+    if pimage.ndim==3:
+        pimage = mean(pimage[:,:,:3], 2)
+    if mean(pimage) > 0.5:
+        pimage = 1.0 - pimage
+    return pimage
+
+for pageno, fname in enumerate(args.fnames):
+    base = re.sub(r"\.[^/]*$", "", fname) + args.suffix
+    os.mkdir(base)
+    pimage = read_image(fname)
+    h, w = pimage.shape
+    lseg = segmenter.lineseg(pimage)
+    count = 0
+    imsave(base+".lines.png", segmenter.lines)
+    imsave(base+".debug.png", 0.5*(segmenter.lines+1.0*pimage))
+    imsave(base+".pseg.png", segmenter.segmentation)
+    for line, bounds in psegutils.extract_textlines(lseg, pimage):
+        count += 1
+        line -= amin(line)
+        line /= amax(line)
+        if mean(line) > 0.5:
+            line = 1.0 - line
+        fout = "%s/01%04x.png" % (base, count)
+        print "#", fout
+        imsave(fout, line)

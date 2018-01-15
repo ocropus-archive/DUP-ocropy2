@@ -48,7 +48,7 @@ def check_page(image):
     if w>10000: return "line too wide for a page image %s"%(image.shape,)
     return None
 
-def estimate_skew_angle(image,angles):
+def estimate_skew_angle(image,angles, args=default_args):
     estimates = []
     for a in angles:
         v = mean(interpolation.rotate(image,a,order=0,mode='constant'),axis=1)
@@ -56,7 +56,7 @@ def estimate_skew_angle(image,angles):
         estimates.append((v,a))
     if args.debug>0:
         plot([y for x,y in estimates],[x for x,y in estimates])
-        ginput(1,args.debug)
+        ginput(1, 0.1)
     _,a = max(estimates)
     return a
 
@@ -65,11 +65,9 @@ def W(s): return s[1].stop-s[1].start
 def A(s): return W(s)*H(s)
 
 def dshow(image,info):
-    if args.debug<=0: return
-    ion(); gray(); imshow(image); title(info); ginput(1,args.debug)
+    ion(); gray(); imshow(image); title(info); ginput(1,0.1)
 
 def process_image(raw, args=default_args):
-    dshow(raw,"input")
     # perform image normalization
     image = raw-amin(raw)
     assert amin(image) < amax(image)
@@ -110,7 +108,7 @@ def process_image(raw, args=default_args):
         est = flat[o0:d0-o0,o1:d1-o1]
         ma = args.maxskew
         ms = int(2*args.maxskew*args.skewsteps)
-        angle = estimate_skew_angle(est,linspace(-ma,ma,ms+1))
+        angle = estimate_skew_angle(est,linspace(-ma,ma,ms+1), args=args)
         flat = interpolation.rotate(flat,angle,mode='constant',reshape=0)
         flat = amax(flat)-flat
     else:

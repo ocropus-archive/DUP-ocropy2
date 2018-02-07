@@ -67,6 +67,8 @@ def process_image(raw, args=default_args):
     # perform image normalization
     image = raw-amin(raw)
     assert amin(image) < amax(image)
+    if image.dtype != dtype('f'):
+        image = array(image, 'f')
     image /= amax(image)
 
     if not args.nocheck:

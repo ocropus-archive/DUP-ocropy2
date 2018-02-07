@@ -8,6 +8,8 @@ import argparse,os,os.path
 from scipy.ndimage import filters,interpolation,morphology,measurements
 from scipy import stats
 import multiprocessing
+import logging
+logger = logging.getLogger()
 
 class Struct(object):
     def __init__(self, **kw):
@@ -31,12 +33,6 @@ default_args = Struct(threshold=0.5,
                       debug=0,
                       nocheck=False,
                       show=False)
-
-def print_info(*objs):
-    print("INFO: ", *objs, file=sys.stdout)
-
-def print_error(*objs):
-    print("ERROR: ", *objs, file=sys.stderr)
 
 def check_page(image):
     if len(image.shape)==3: return "input image is color image %s"%(image.shape,)
@@ -88,7 +84,7 @@ def process_image(raw, args=default_args):
     else:
         comment = ""
         # if not, we need to flatten it by estimating the local whitelevel
-        print_info("flattening")
+        logger.info("flattening")
         m = interpolation.zoom(image,args.zoom)
         m = filters.percentile_filter(m,args.perc,size=(args.range,2))
         m = filters.percentile_filter(m,args.perc,size=(2,args.range))
@@ -100,7 +96,7 @@ def process_image(raw, args=default_args):
 
     # estimate skew angle and rotate
     if args.maxskew>0:
-        print_info("estimating skew angle")
+        logger.info("estimating skew angle")
         d0,d1 = flat.shape
         o0,o1 = int(args.bignore*d0),int(args.bignore*d1)
         flat = amax(flat)-flat
@@ -115,7 +111,7 @@ def process_image(raw, args=default_args):
         angle = 0
 
     # estimate low and high thresholds
-    print_info("estimating thresholds")
+    logger.info("estimating thresholds")
     d0,d1 = flat.shape
     o0,o1 = int(args.bignore*d0),int(args.bignore*d1)
     est = flat[o0:d0-o0,o1:d1-o1]
@@ -134,15 +130,15 @@ def process_image(raw, args=default_args):
     lo = stats.scoreatpercentile(est.ravel(),args.lo)
     hi = stats.scoreatpercentile(est.ravel(),args.hi)
     # rescale the image to get the gray scale image
-    print_info("rescaling")
+    logger.info("rescaling")
     flat -= lo
     flat /= (hi-lo)
-    flat = clip(flat,0,1)
+    flat = array(clip(flat,0,1), 'f')
     if args.debug>0: imshow(flat,vmin=0,vmax=1); ginput(1,args.debug)
-    bin = 1*(flat>args.threshold)
+    bin = array(255*(flat>args.threshold), dtype='uint8')
 
     # output the normalized grayscale and the thresholded images
-    print_info("lo-hi (%.2f %.2f) angle %4.1f %s" % (lo, hi, angle, comment))
+    logger.info("lo-hi (%.2f %.2f) angle %4.1f %s" % (lo, hi, angle, comment))
     if args.debug>0 or args.show: clf(); gray();imshow(bin); ginput(1,max(0.1,args.debug))
 
-    return bin, flat
+    return Struct(bin=bin, flat=flat, angle=angle)

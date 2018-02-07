@@ -5,6 +5,8 @@ from pylab import *
 from pylab import mean
 from scipy.ndimage import filters, interpolation, measurements, morphology
 from scipy.ndimage.morphology import *
+import logging
+logger = logging.getLogger()
 
 ################################################################
 # utilities for lists of slices, treating them like rectangles
@@ -706,13 +708,6 @@ def check_page(image):
     return None
 
 
-def print_info(*objs):
-    print("INFO: ", objs)
-
-
-def print_error(*objs):
-    print("ERROR: ", objs)
-
 
 def B(a):
     if a.dtype == dtype('B'):
@@ -727,7 +722,7 @@ def DSAVE(title, image, args=None):
         assert len(image) == 3
         image = transpose(array(image), [1, 2, 0])
     fname = "_" + title + ".png"
-    print_info("debug " + fname)
+    logger.info("debug " + fname)
     imsave(fname, image)
 
 
@@ -819,7 +814,7 @@ def compute_colseps_conv(binary, scale=1.0, args=None):
 
 def compute_colseps(binary, scale, args):
     """Computes column separators either from vertical black lines or whitespace."""
-    print_info("considering at most %g whitespace column separators" %
+    logger.info("considering at most %g whitespace column separators" %
                args.maxcolseps)
     colseps = compute_colseps_conv(binary, scale, args=args)
     DSAVE("colwsseps", 0.7 * colseps + 0.3 * binary, args=args)
@@ -829,7 +824,7 @@ def compute_colseps(binary, scale, args):
         # and not set manually to a non-zero value
         args.maxseps = 2
     if args.maxseps > 0:
-        print_info("considering at most %g black column separators" %
+        logger.info("considering at most %g black column separators" %
                    args.maxseps)
         seps = compute_separators_morph(binary, scale, args=args)
         DSAVE("colseps", 0.7 * seps + 0.3 * binary, args=args)
@@ -926,12 +921,12 @@ def compute_segmentation(binary, scale, args=None):
 
     # do the column finding
     if not args.quiet:
-        print_info("computing column separators")
+        logger.info("computing column separators")
     colseps, binary = compute_colseps(binary, scale, args=args)
 
     # now compute the text line seeds
     if not args.quiet:
-        print_info("computing lines")
+        logger.info("computing lines")
     bottom, top, boxmap = compute_gradmaps(binary, scale, args=args)
     seeds = compute_line_seeds(binary, bottom, top, colseps, scale, args=args)
     DSAVE("seeds", [bottom, top, boxmap], args=args)
@@ -939,10 +934,10 @@ def compute_segmentation(binary, scale, args=None):
     # spread the text line seeds to all the remaining
     # components
     if not args.quiet:
-        print_info("propagating labels")
+        logger.info("propagating labels")
     llabels = propagate_labels(boxmap, seeds, conflict=0)
     if not args.quiet:
-        print_info("spreading labels")
+        logger.info("spreading labels")
     spread = spread_labels(seeds, maxdist=scale)
     llabels = where(llabels > 0, llabels, spread * binary)
     segmentation = llabels * binary
@@ -955,7 +950,8 @@ def compute_segmentation(binary, scale, args=None):
 
 def find_lines(binary, gray=None, args=default_args):
     assert binary.ndim == 2
-    assert sum((binary != 0) * (binary != 1)) == 0
+    assert sum((binary != 0) * (binary != amax(binary))) == 0
+    binary = 1 * (binary != 0)
 
     if not args.nocheck:
         error = check_page(amax(binary) - binary)
@@ -974,30 +970,30 @@ def find_lines(binary, gray=None, args=default_args):
         scale = estimate_scale(binary)
     else:
         scale = args.scale
-    print_info("scale %f" % (scale))
+    logger.info("scale %f" % (scale))
     if isnan(scale) or scale > 1000.0:
-        print_error("%s: bad scale (%g); skipping\n" % (fname, scale))
+        logger.info("%s: bad scale (%g); skipping\n" % (fname, scale))
         return
     if scale < args.minscale:
-        print_error("%s: scale (%g) less than --minscale; skipping\n" %
+        logger.info("%s: scale (%g) less than --minscale; skipping\n" %
                     (fname, scale))
         return
 
     # find columns and text lines
 
     if not args.quiet:
-        print_info("computing segmentation")
+        logger.info("computing segmentation")
     segmentation = compute_segmentation(binary, scale, args=args)
     if amax(segmentation) > args.maxlines:
-        print_error("%s: too many lines %g" % (fname, amax(segmentation)))
+        logger.info("%s: too many lines %g" % (fname, amax(segmentation)))
         return
     if not args.quiet:
-        print_info("number of lines %g" % amax(segmentation))
+        logger.info("number of lines %g" % amax(segmentation))
 
     # compute the reading order
 
     if not args.quiet:
-        print_info("finding reading order")
+        logger.info("finding reading order")
     lines = compute_lines(segmentation, scale)
     order = reading_order([l.bounds for l in lines])
     lsort = topsort(order)
